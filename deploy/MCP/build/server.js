@@ -66,35 +66,52 @@ function parseBase64Image(input) {
     if (dataUrlMatch) {
         const mime = dataUrlMatch[1];
         const base64 = dataUrlMatch[2];
-        const bytes = new Uint8Array(Buffer.from(base64, "base64"));
+        const bytes = Uint8Array.from(Buffer.from(base64, "base64"));
         return {
             bytes,
             ext: guessExtensionFromContentType(mime),
         };
     }
-    const bytes = new Uint8Array(Buffer.from(input, "base64"));
+    const bytes = Uint8Array.from(Buffer.from(input, "base64"));
     return {
         bytes,
         ext: "png",
     };
 }
 async function fetchImageFromUrl(imageUrl) {
-    const response = await fetch(imageUrl);
+    let response;
+    try {
+        response = await fetch(imageUrl);
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to download image URL: ${message}`);
+    }
     if (!response.ok) {
         throw new Error(`Failed to download image URL. HTTP ${response.status}`);
+    }
+    const contentType = response.headers.get("content-type");
+    if (contentType && !contentType.toLowerCase().startsWith("image/")) {
+        throw new Error(`URL did not return an image. Content-Type: ${contentType}`);
     }
     const arrayBuffer = await response.arrayBuffer();
     return {
         bytes: new Uint8Array(arrayBuffer),
-        ext: guessExtensionFromContentType(response.headers.get("content-type")),
+        ext: guessExtensionFromContentType(contentType),
     };
 }
 async function readImageFromPath(imagePath) {
-    const bytes = await readFile(imagePath);
-    return {
-        bytes: new Uint8Array(bytes),
-        ext: guessExtensionFromFilePath(imagePath),
-    };
+    try {
+        const bytes = await readFile(imagePath);
+        return {
+            bytes: new Uint8Array(bytes),
+            ext: guessExtensionFromFilePath(imagePath),
+        };
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to read local image path: ${message}`);
+    }
 }
 async function requestPresign(ext) {
     const response = await fetch(API_URL, {
@@ -152,25 +169,28 @@ export function createServer() {
     });
     server.registerTool("detect_image", {
         title: "Detect AI-generated image",
-        description: "Detect whether an image is real or fake from a public URL, local file path, or base64 image.",
+        description: "Detect whether an image is real or fake. Provide exactly one of imageUrl, imagePath, imageBase64, or image. If you have a normal web image link, use imageUrl. The field image is accepted as an alias for imageUrl.",
         inputSchema: z
             .object({
             imageUrl: z.string().url().optional().describe("Public image URL."),
             imagePath: z.string().min(1).optional().describe("Local file path to an image."),
             imageBase64: z.string().min(1).optional().describe("Base64 image string or data URL."),
+            image: z.string().optional().describe("Alias for imageUrl."),
         })
             .refine((value) => {
             const count = Number(Boolean(value.imageUrl)) +
                 Number(Boolean(value.imagePath)) +
-                Number(Boolean(value.imageBase64));
+                Number(Boolean(value.imageBase64)) +
+                Number(Boolean(value.image));
             return count === 1;
-        }, "Provide exactly one of imageUrl, imagePath, or imageBase64."),
-    }, async ({ imageUrl, imagePath, imageBase64 }) => {
+        }, "Provide exactly one of imageUrl, imagePath, imageBase64, or image."),
+    }, async ({ imageUrl, imagePath, imageBase64, image }) => {
         try {
+            const finalImageUrl = imageUrl ?? image;
             let bytes;
             let ext;
-            if (imageUrl) {
-                ({ bytes, ext } = await fetchImageFromUrl(imageUrl));
+            if (finalImageUrl) {
+                ({ bytes, ext } = await fetchImageFromUrl(finalImageUrl));
             }
             else if (imagePath) {
                 ({ bytes, ext } = await readImageFromPath(imagePath));
