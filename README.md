@@ -18,3 +18,13 @@ Our trained model can be found [here](./checkpoints/ours.pth).
 ## ONNX
 
 An ONNX version of our trained model can be found [here](./deploy/AWS/Lambda/model.onnx), with inference script [here](./deploy/onnx/onnx_infer.py).
+
+## Model Context Protocol (MCP)
+
+An MCP Server is implemented [here](./deploy/MCP/) as a *Tool* that allows LLMs to analyze images and determine if they are AI-generated.
+
+- MCP Server URL: https://175.178.11.87/mcp
+- Transport: Streamable HTTP
+- Authentication: No
+
+> **Note:** ChatGPT currently cannot connect to this MCP Server because it does not support IP-based endpoints; a domain-hosted version compatible with ChatGPT connectors is under development.
