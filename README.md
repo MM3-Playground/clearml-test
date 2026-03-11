@@ -17,4 +17,4 @@ Our trained model can be found [here](./checkpoints/ours.pth).
 
 ## ONNX
 
-An ONNX version of our trained model can be found [here](./onnx/model.onnx), with inference script [here](./onnx/onnx_infer.py).
+An ONNX version of our trained model can be found [here](./deploy/AWS/Lambda/model.onnx), with inference script [here](./deploy/onnx/onnx_infer.py).
