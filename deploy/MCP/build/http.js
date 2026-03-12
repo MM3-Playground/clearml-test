@@ -7,7 +7,7 @@ const PORT = parseInt(process.env.PORT ?? "3366", 10);
 async function startStreamableHTTPServer(createServerFactory) {
     const app = createMcpExpressApp({ host: "0.0.0.0" });
     app.use(cors());
-    app.all("/mcp", async (req, res) => {
+    app.all("/freqaidetector-mcp", async (req, res) => {
         const server = createServerFactory();
         const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: undefined,

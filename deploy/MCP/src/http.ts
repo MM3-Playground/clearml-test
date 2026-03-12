@@ -17,7 +17,7 @@ async function startStreamableHTTPServer(
 
   app.use(cors());
 
-  app.all("/mcp", async (req: Request, res: Response) => {
+  app.all("/freqaidetector-mcp", async (req: Request, res: Response) => {
     const server = createServerFactory();
 
     const transport = new StreamableHTTPServerTransport({

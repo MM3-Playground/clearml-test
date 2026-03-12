@@ -23,7 +23,7 @@ An ONNX version of our trained model can be found [here](./deploy/AWS/Lambda/mod
 
 An MCP Server is implemented [here](./deploy/MCP/) as a *Tool* that allows LLMs to analyze images and determine if they are AI-generated.
 
-- MCP Server URL: https://175.178.11.87/mcp
+- MCP Server URL: https://175.178.11.87/freqaidetector-mcp
 - Transport: Streamable HTTP
 - Authentication: No
 
