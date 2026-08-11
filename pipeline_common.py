@@ -28,8 +28,36 @@ def resolve_dataset_root(dataset_id="", persistent_dataset_path=""):
     if not dataset_id:
         raise ValueError("Either dataset_id or persistent_dataset_path is required")
 
-    dataset = Dataset.get(dataset_id=dataset_id, alias="dataset")
-    return Path(dataset.get_local_copy()).resolve(), "clearml"
+    dataset = Dataset.get(
+        dataset_id=dataset_id,
+        alias="dataset",
+    )
+
+    # TEMPORARY DEBUGGING
+    files = dataset.list_files()
+
+    print(f"[dataset] id={dataset_id}")
+    print(f"[dataset] number of files={len(files)}")
+    print(f"[dataset] first files={files[:20]}")
+
+    root = Path(
+        dataset.get_local_copy(
+            use_soft_links=False,
+            raise_on_error=True,
+        )
+    ).resolve()
+
+    print(f"[dataset] local root={root}")
+
+    if root.exists():
+        print(
+            f"[dataset] local entries="
+            f"{list(root.iterdir())[:20]}"
+        )
+    else:
+        print("[dataset] local root DOES NOT EXIST")
+
+    return root, "clearml"
 
 
 def materialize_manifests(
