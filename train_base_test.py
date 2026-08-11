@@ -9,6 +9,7 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
@@ -20,6 +21,8 @@ from utils.losses import *
 from models.Xception import *
 from models.CNNDCT import *
 from models.A import *
+
+from clearml import OutputModel
 
 # for multiprocessing
 def setup_for_distributed(is_master):
@@ -95,6 +98,11 @@ def parse_args():
     ## log
     parser.add_argument('--save_dir', type=str, default='.', help='dir to save checkpoints and logs')
     parser.add_argument("--log_interval", type=int, default=0, help="interval between saving image samples")
+    
+    ## ClearML
+    parser.add_argument("--clearml_project_name", type=str, help="ClearML project name")
+    parser.add_argument("--clearml_task_name", type=str, help="ClearML task name")
+    parser.add_argument("--clearml_dataset_name", type=str, help="ClearML dataset name")
     
     args = parser.parse_args()
 
@@ -247,6 +255,7 @@ def save_checkpoints(args, checkpoint_dir, id, epoch, save_best, last_best, get_
         os.remove(last_pth)
 
     # save best
+    save_best_pth = None
     if (save_best):
         save_best_pth = os.path.join(checkpoint_dir, str(id) + "_best_" + str(epoch) + '.pth')
         torch.save(net.state_dict(), save_best_pth)
@@ -256,6 +265,8 @@ def save_checkpoints(args, checkpoint_dir, id, epoch, save_best, last_best, get_
         #     os.remove(last_best_pth)
 
         print('Checkpoint saved to %s.' % (save_best_pth))
+
+    return last_pth, save_best_pth
 
 def predict_loss(args, data, model,
                 criterion_BCE):
@@ -313,7 +324,8 @@ def train(args, global_rank, world_size, sync, get_module,
             train_sampler, dataloader, val_sampler, val_dataloader,
             optimizer,
             lr_scheduler,
-            prev_best_val_loss, prev_n_last_epochs):
+            prev_best_val_loss, prev_n_last_epochs,
+            task):
     # Losses that are built-in in PyTorch
     criterion_BCE = nn.BCEWithLogitsLoss().cuda()
 
@@ -455,7 +467,7 @@ def train(args, global_rank, world_size, sync, get_module,
 
             # save model parameters
             if global_rank == 0:
-                save_checkpoints(args, checkpoint_dir, args.id, epoch,
+                last_pth, save_best_pth = save_checkpoints(args, checkpoint_dir, args.id, epoch,
                                  new_best == epoch, last_best,
                                  get_module,
                                  model)
@@ -472,7 +484,7 @@ def train(args, global_rank, world_size, sync, get_module,
 
                 if lr_scheduler.num_bad_epochs == 0:
                     lr_last_best = epoch
-                    
+
         # reset early stopping when learning rate changed
         lr_after_step = optimizer.param_groups[0]['lr']
         if (lr_after_step != lr_before_step):
@@ -484,6 +496,22 @@ def train(args, global_rank, world_size, sync, get_module,
             break
 
     print('Finished training')
+
+    # log to ClearML
+    if global_rank == 0:
+        # define output model
+        output_model = OutputModel(
+            task=task,
+            name=f"{args.clearml_task_name}-model"
+        )
+
+        # upload model
+        output_model.update_weights(
+            weights_filename=save_best_pth,
+            target_filename=os.path.basename(save_best_pth),
+            auto_delete_file=False,
+            async_enable=False,
+        )
 
     if global_rank == 0:
         writer.close()

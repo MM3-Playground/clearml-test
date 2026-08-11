@@ -4,6 +4,8 @@ from datetime import timedelta
 import torch
 import torch.nn as nn
 
+from clearml import Task, Dataset as ClearMLDataset
+
 # multiprocessing
 from utils.dist import *
 
@@ -15,6 +17,27 @@ GET_MODULE = True
 
 def main():
     args = parse_args()
+
+    # ClearML
+    task = Task.init(
+        project_name=args.clearml_project_name,
+        task_name=args.clearml_task_name,
+        output_uri=True,
+        auto_connect_frameworks={'pytorch': False},
+        auto_connect_arg_parser={'local_rank': False})
+
+    # dataset is downloaded separately, but we can log it to ClearML
+    ClearMLDataset.get(
+        dataset_project=args.clearml_project_name,
+        dataset_name=args.clearml_dataset_name,
+        alias="training"
+    )
+
+    ClearMLDataset.get(
+        dataset_project=args.clearml_project_name,
+        dataset_name=args.clearml_dataset_name,
+        alias="val"
+    )
 
     # Init dist
     init_dist('slurm', args.port)
@@ -64,7 +87,8 @@ def main():
             train_sampler, dataloader, val_sampler, val_dataloader,
             optimizer,
             lr_scheduler,
-            prev_best_val_loss, prev_n_last_epochs)
+            prev_best_val_loss, prev_n_last_epochs,
+            task)
 
 if __name__ == '__main__':
     main()
