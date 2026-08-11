@@ -11,97 +11,97 @@ from pipeline_steps import evaluate_step, train_step
 PARAMETERS = {
     "execution_backend": (
         "worker_cpu",
-        "worker_cpu for the CPU ClearML test worker; alliance for original Slurm trainer",
+        "worker_cpu or alliance",
         "str",
     ),
     "dataset_id": (
         "",
-        "ClearML Dataset ID. Leave empty when using a persistent dataset path.",
+        "ClearML Dataset ID",
         "str",
     ),
     "dataset_project": (
         "",
-        "Optional ClearML Dataset project metadata.",
+        "ClearML Dataset project",
         "str",
     ),
     "dataset_name": (
         "",
-        "Optional ClearML Dataset name metadata; used by the original Alliance trainer.",
+        "ClearML Dataset name",
         "str",
     ),
     "persistent_dataset_path": (
         "",
-        "Pre-downloaded dataset path such as /workspace/persistent-data/name.",
+        "Pre-downloaded persistent dataset path",
         "str",
     ),
     "manifest_task_id": (
         "",
-        "Task ID produced by upload_manifests.py.",
+        "Manifest bundle Task ID",
         "str",
     ),
     "clearml_project_name": (
         "clearml-orchestration-demo",
-        "Project for experiment/task tracking.",
+        "Experiment project",
         "str",
     ),
     "clearml_task_name": (
-        "training",
-        "Training task display name used by the original trainer.",
+        "cpu-demo",
+        "Training task name",
         "str",
     ),
     "run_name": (
-        "demo",
-        "Run/model display name.",
+        "cpu-demo",
+        "Run name",
         "str",
     ),
     "model": (
         "ours",
-        "xception, cnndct, cnnpixel, or ours.",
+        "Model type",
         "str",
     ),
     "image_size": (
         128,
-        "Input image size.",
+        "Image size",
         "int",
     ),
     "batch_size": (
         1,
-        "Batch size.",
+        "Batch size",
         "int",
     ),
     "workers": (
         0,
-        "DataLoader workers.",
+        "DataLoader workers",
         "int",
     ),
     "n_epochs": (
         2,
-        "Training epochs.",
+        "Training epochs",
         "int",
     ),
     "lr": (
         0.001,
-        "Learning rate.",
+        "Learning rate",
         "float",
     ),
     "factor": (
         0.9,
-        "Scheduler factor.",
+        "Scheduler factor",
         "float",
     ),
     "patience": (
         5,
-        "Scheduler patience.",
+        "Scheduler patience",
         "int",
     ),
     "minimum_accuracy": (
         0.0,
-        "Evaluation acceptance threshold.",
+        "Acceptance threshold",
         "float",
     ),
     "input_model_id": (
         "",
-        "Optional ClearML model ID for retraining.",
+        "Optional input model ID for retraining",
         "str",
     ),
 }
@@ -123,20 +123,6 @@ def git_info():
             "Git origin must be a cloneable remote URL"
         )
 
-    dirty = subprocess.run(
-        ["git", "status", "--porcelain"],
-        text=True,
-        capture_output=True,
-        check=True,
-    ).stdout.strip()
-
-    if dirty:
-        print(
-            "WARNING: code changes are uncommitted. "
-            "Remote tasks execute the recorded pushed commit; "
-            "local JSON settings are captured separately."
-        )
-
     return repo, branch, commit
 
 
@@ -146,75 +132,7 @@ def load_settings(path):
     )
 
 
-def _get_remote_pipeline_parameters():
-    """
-    Read the effective pipeline parameters from the currently executing
-    ClearML controller Task.
-
-    This is used when the controller itself is running remotely.
-
-    ClearML stores PipelineController.add_parameter() values under the
-    pipeline hyperparameter section. Values changed through '+ NEW RUN'
-    are already applied to this Task before the controller script runs.
-    """
-    task = Task.current_task()
-
-    if task is None:
-        return {}
-
-    parameters = task.get_parameters(cast=True) or {}
-
-    result = {}
-
-    for name in PARAMETERS:
-        # ClearML normally stores PipelineController parameters under
-        # "pipeline/<name>". Support the capitalized form defensively too.
-        for key in (
-            f"pipeline/{name}",
-            f"Pipeline/{name}",
-        ):
-            if key in parameters:
-                result[name] = parameters[key]
-                break
-
-    return result
-
-
-def _resolve_settings(initial_settings):
-    """
-    Determine the settings that should be used while constructing the DAG.
-
-    Initial submission:
-        values come from the user's local JSON.
-
-    Remote controller / UI '+ NEW RUN':
-        values come from the controller Task's effective pipeline parameters.
-
-    The JSON file therefore never needs to be opened on the worker.
-    """
-    settings = {
-        name: default
-        for name, (default, _description, _type) in PARAMETERS.items()
-    }
-
-    if initial_settings is not None:
-        settings.update(initial_settings)
-        return settings
-
-    # We are executing the controller remotely.
-    remote_settings = _get_remote_pipeline_parameters()
-
-    if not remote_settings:
-        raise RuntimeError(
-            "The remote pipeline controller did not contain any "
-            "pipeline parameters."
-        )
-
-    settings.update(remote_settings)
-    return settings
-
-
-def build_pipeline(args, initial_settings=None):
+def build_pipeline(args, settings):
     repo, branch, commit = git_info()
 
     pipe = PipelineController(
@@ -223,41 +141,30 @@ def build_pipeline(args, initial_settings=None):
         version=args.version,
         abort_on_failure=True,
         add_pipeline_tags=True,
-        docker=args.controller_docker,
-
-        # Controller itself only needs ClearML.
-        packages=["clearml==2.1.11"],
 
         repo=repo,
         repo_branch=branch or None,
         repo_commit=commit,
 
-        # Important:
-        # Function-based pipelines are rebuilt from code when remotely
-        # executed / started through '+ NEW RUN'. This lets us read the
-        # effective controller parameters and inject them into the steps.
-        always_create_from_code=True,
+        docker=args.controller_docker,
+        packages=["clearml==2.1.11"],
 
-        skip_global_imports=True,
+        # CRITICAL:
+        # Store the DAG/configuration built here.
+        # Remote/UI runs use this captured definition instead of
+        # executing this Python code again to rebuild the DAG.
+        always_create_from_code=False,
+
         working_dir=".",
     )
 
-    settings = _resolve_settings(initial_settings)
+    # Store the settings dictionary as a ClearML configuration as well.
+    settings = pipe.connect_configuration(
+        settings,
+        name="run_settings",
+    )
 
-    # Store the original locally supplied JSON as a ClearML configuration
-    # object. Do this only during initial submission. A remotely executing
-    # controller already has its recorded configuration.
-    if initial_settings is not None:
-        pipe.connect_configuration(
-            initial_settings,
-            name="run_settings",
-        )
-
-    # Expose all researcher-facing values as pipeline parameters.
-    #
-    # On initial submission, defaults come from the local JSON.
-    # On remote/UI execution, defaults are the effective values already
-    # present on the controller Task.
+    # Pipeline parameters get their initial values from the LOCAL JSON.
     for name, (default, description, param_type) in PARAMETERS.items():
         pipe.add_parameter(
             name=name,
@@ -270,29 +177,19 @@ def build_pipeline(args, initial_settings=None):
         args.execution_queue
     )
 
-    step_common = dict(
-        project_name=args.project,
-        packages=False,
-        repo=repo,
-        repo_branch=branch or None,
-        repo_commit=commit,
-        docker=args.task_docker,
-        execution_queue=args.execution_queue,
-        cache_executed_step=False,
-        working_dir=".",
-        output_uri=True,
-    )
+    step_common = {
+        "project_name": args.project,
+        "packages": False,
+        "repo": repo,
+        "repo_branch": branch or None,
+        "repo_commit": commit,
+        "docker": args.task_docker,
+        "execution_queue": args.execution_queue,
+        "cache_executed_step": False,
+        "working_dir": ".",
+        "output_uri": True,
+    }
 
-    # ------------------------------------------------------------
-    # Training
-    # ------------------------------------------------------------
-    #
-    # Use the values already resolved from the controller Task instead of
-    # asking ClearML to perform another ${pipeline.x} interpolation when
-    # creating the standalone function Task.
-    #
-    # This is the important change for the dataset_id problem.
-    #
     pipe.add_function_step(
         name="train",
         task_name="pipeline-train",
@@ -300,70 +197,63 @@ def build_pipeline(args, initial_settings=None):
         function=train_step,
         function_kwargs={
             "execution_backend":
-                settings["execution_backend"],
+                "${pipeline.execution_backend}",
 
             "dataset_id":
-                settings["dataset_id"],
+                "${pipeline.dataset_id}",
 
             "dataset_project":
-                settings["dataset_project"],
+                "${pipeline.dataset_project}",
 
             "dataset_name":
-                settings["dataset_name"],
+                "${pipeline.dataset_name}",
 
             "persistent_dataset_path":
-                settings["persistent_dataset_path"],
+                "${pipeline.persistent_dataset_path}",
 
             "manifest_task_id":
-                settings["manifest_task_id"],
+                "${pipeline.manifest_task_id}",
 
             "clearml_project_name":
-                settings["clearml_project_name"],
+                "${pipeline.clearml_project_name}",
 
             "clearml_task_name":
-                settings["clearml_task_name"],
+                "${pipeline.clearml_task_name}",
 
             "run_name":
-                settings["run_name"],
+                "${pipeline.run_name}",
 
             "model":
-                settings["model"],
+                "${pipeline.model}",
 
             "image_size":
-                settings["image_size"],
+                "${pipeline.image_size}",
 
             "batch_size":
-                settings["batch_size"],
+                "${pipeline.batch_size}",
 
             "workers":
-                settings["workers"],
+                "${pipeline.workers}",
 
             "n_epochs":
-                settings["n_epochs"],
+                "${pipeline.n_epochs}",
 
             "lr":
-                settings["lr"],
+                "${pipeline.lr}",
 
             "factor":
-                settings["factor"],
+                "${pipeline.factor}",
 
             "patience":
-                settings["patience"],
+                "${pipeline.patience}",
 
             "input_model_id":
-                settings["input_model_id"],
+                "${pipeline.input_model_id}",
         },
         function_return=["training"],
         **step_common,
     )
 
-    # ------------------------------------------------------------
-    # Evaluation
-    # ------------------------------------------------------------
-    #
-    # The training output still needs ClearML pipeline interpolation because
-    # it does not exist until the training step finishes.
-    #
     pipe.add_function_step(
         name="evaluate",
         task_name="pipeline-evaluate",
@@ -374,22 +264,22 @@ def build_pipeline(args, initial_settings=None):
                 "${train.training}",
 
             "dataset_id":
-                settings["dataset_id"],
+                "${pipeline.dataset_id}",
 
             "persistent_dataset_path":
-                settings["persistent_dataset_path"],
+                "${pipeline.persistent_dataset_path}",
 
             "manifest_task_id":
-                settings["manifest_task_id"],
+                "${pipeline.manifest_task_id}",
 
             "model":
-                settings["model"],
+                "${pipeline.model}",
 
             "image_size":
-                settings["image_size"],
+                "${pipeline.image_size}",
 
             "minimum_accuracy":
-                settings["minimum_accuracy"],
+                "${pipeline.minimum_accuracy}",
         },
         function_return=["evaluation"],
         parents=["train"],
@@ -400,9 +290,7 @@ def build_pipeline(args, initial_settings=None):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="ClearML training -> evaluation pipeline"
-    )
+    parser = argparse.ArgumentParser()
 
     parser.add_argument(
         "--config",
@@ -427,7 +315,7 @@ def parse_args():
 
     parser.add_argument(
         "--version",
-        default="1.1.0",
+        default="1.2.0",
     )
 
     parser.add_argument(
@@ -456,35 +344,25 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # Only the initial/local process reads the JSON file.
+    # Initial pipeline definition is created on the user's machine.
     #
-    # When ClearML re-executes this controller remotely, the original
-    # command line can still contain --config, but the worker does not open
-    # that file. Instead, _resolve_settings() retrieves the effective values
-    # from the controller Task.
-    if Task.running_locally():
-        initial_settings = load_settings(
-            args.config
-        )
-    else:
-        initial_settings = None
+    # This is where the JSON is consumed.
+    #
+    # Because always_create_from_code=False, ClearML stores the resulting
+    # DAG and parameters. Remote/UI executions use the stored definition.
+    settings = load_settings(args.config)
 
     pipe = build_pipeline(
         args,
-        initial_settings,
+        settings,
     )
 
     if args.mode == "local":
-        # Alliance/local execution:
-        # controller + steps stay on the current machine/allocation.
         pipe.start_locally(
             run_pipeline_steps_locally=True
         )
 
     else:
-        # Remote ClearML execution:
-        # submit controller to the services queue and immediately return
-        # from the user's local process.
         pipe.start(
             queue=args.controller_queue,
             wait=False,
