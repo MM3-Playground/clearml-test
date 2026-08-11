@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import subprocess
@@ -301,6 +300,9 @@ def evaluate_component(
     repo=CODE_REPO or None,
     repo_commit=CODE_COMMIT or None,
     packages=False,
+    # Initial bootstrap runs only the lightweight controller locally;
+    # train/evaluate components are still submitted to ClearML queues.
+    start_controller_locally=True,
 )
 def training_pipeline(
     dataset_id: str = "",
@@ -346,89 +348,3 @@ def training_pipeline(
         image_size,
         minimum_accuracy,
     )
-
-
-def _normalize_config_path(value: str) -> str:
-    # ClearML re-executes the controller on Linux. Always store a portable
-    # repository-relative path in the Task command line/configuration metadata.
-    return value.replace("\\", "/").removeprefix("./")
-
-
-def _connect_run_configuration(config_path: str) -> dict:
-    """Store local JSON contents in ClearML and restore them on remote execution.
-
-    The path is only a stable slot name. ClearML's backend configuration object is
-    the source of truth once the controller is handed to an agent, so uncommitted
-    local JSON edits are preserved.
-    """
-    task = Task.init(
-        project_name=PIPELINE_PROJECT,
-        task_name=PIPELINE_NAME,
-        task_type=Task.TaskTypes.controller,
-        auto_connect_arg_parser=False,
-    )
-
-    if CODE_REPO and Task.running_locally():
-        task.set_script(
-            repository=CODE_REPO,
-            branch=CODE_BRANCH or None,
-            commit=CODE_COMMIT or None,
-            working_dir=".",
-            entry_point="pipeline_clearml.py",
-        )
-        # Empty package section => agent uses repository requirements.txt.
-        task.set_packages("")
-        task.set_base_docker(docker_image=DEFAULT_DOCKER)
-
-    connected_path = task.connect_configuration(
-        configuration=config_path,
-        name="Pipeline Settings",
-        description="Runtime pipeline settings captured from the bootstrap JSON file",
-    )
-    return json.loads(Path(connected_path).read_text(encoding="utf-8"))
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    sub = parser.add_subparsers(dest="cmd", required=True)
-
-    manifests = sub.add_parser("manifests")
-    manifests.add_argument("--config", required=True)
-
-    run = sub.add_parser("run")
-    run.add_argument("--config", required=True)
-    run.add_argument("--mode", choices=["local", "remote"], default="remote")
-    run.add_argument("--queue", default=DEFAULT_QUEUE)
-
-    args = parser.parse_args()
-
-    if args.cmd == "manifests":
-        config = json.loads(Path(args.config).read_text(encoding="utf-8"))
-        print(json.dumps({"manifest_task_id": upload_manifest_bundle(config)}, indent=2))
-        return
-
-    config_path = _normalize_config_path(args.config)
-
-    if args.mode == "remote":
-        _require_remote_git()
-        if args.queue != DEFAULT_QUEUE:
-            raise ValueError(
-                f"This pipeline was defined with queue {DEFAULT_QUEUE!r}. "
-                "Set CLEARML_PIPELINE_QUEUE before launching if you need a different queue."
-            )
-
-    # IMPORTANT: connect_configuration() is called before reading the JSON.
-    # Local/bootstrap execution uploads the local contents. Remote execution
-    # restores those captured contents from the ClearML backend to this path.
-    settings = _connect_run_configuration(config_path)
-
-    if args.mode == "local":
-        PipelineDecorator.run_locally()
-
-    # The JSON path itself is not a pipeline input. Only its captured contents
-    # become pipeline parameters (Args/*), which are editable in + NEW RUN.
-    training_pipeline(**settings)
-
-
-if __name__ == "__main__":
-    main()
