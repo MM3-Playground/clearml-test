@@ -22,6 +22,9 @@ def resolve_dataset_root(
 ):
     from clearml import Dataset, Task
 
+    # Persistent dataset:
+    # already downloaded by the administrator and mounted into
+    # the worker-created container. Do not ask ClearML to download it.
     if persistent_dataset_path:
         root = Path(
             persistent_dataset_path
@@ -34,6 +37,7 @@ def resolve_dataset_root(
 
         return root, "persistent"
 
+    # Normal ClearML dataset.
     dataset_id = str(dataset_id or "").strip()
 
     if not dataset_id:
@@ -67,7 +71,7 @@ def resolve_dataset_root(
     )
 
     print(
-        f"[dataset] downloading Dataset {dataset_id} "
+        f"[dataset] downloading dataset {dataset_id} "
         f"to {target}"
     )
 
@@ -78,15 +82,23 @@ def resolve_dataset_root(
         )
     ).resolve()
 
+    downloaded_files = [
+        str(path.relative_to(root))
+        for path in root.rglob("*")
+        if path.is_file()
+    ]
+
     print(f"[dataset] local root={root}")
     print(
         f"[dataset] downloaded files="
-        f"{[
-            str(p.relative_to(root))
-            for p in root.rglob('*')
-            if p.is_file()
-        ][:20]}"
+        f"{downloaded_files[:20]}"
     )
+
+    if not downloaded_files:
+        raise RuntimeError(
+            f"ClearML Dataset {dataset_id} was downloaded to "
+            f"{root}, but the resulting directory contains no files"
+        )
 
     return root, "clearml"
 
