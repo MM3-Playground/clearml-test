@@ -159,3 +159,12 @@ git push
 ```
 
 Local JSON settings can remain gitignored because their contents are transferred through ClearML rather than relying on the repository copy.
+
+
+## Configuration handoff (important)
+
+`pipeline_submit.py` calls `PipelineController.connect_configuration()` **before** it reads the JSON file. The `--config` path must be repository-relative (for example `configs/run.local.json`; Windows backslashes are normalized). ClearML stores the exact local file contents in the controller Task. When the controller is re-executed by the `services` agent, ClearML restores those stored contents to the same relative path before the script reads it.
+
+This means the JSON file can be gitignored or locally modified; remote execution uses the captured contents, not the committed copy. The Git repository remains the source of code, while the captured configuration/pipeline parameters are the source of runtime settings.
+
+Remote submission uses `wait=False` only on the submitting machine. The remotely executed services controller uses `wait=True` so it remains alive for the lifetime of the train -> evaluate pipeline.
