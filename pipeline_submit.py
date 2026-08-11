@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from clearml import PipelineController
+from clearml import Task
 
 from pipeline_steps import evaluate_step, train_step
 
@@ -558,33 +559,30 @@ def parse_args():
 def main():
     args = parse_args()
 
-    pipe = build_pipeline(
-        args
-    )
+    pipe = build_pipeline(args)
 
     if args.mode == "local":
-        # Alliance/local:
-        # controller and pipeline steps execute in the current
-        # machine/allocation rather than through ClearML agents.
         pipe.start_locally(
             run_pipeline_steps_locally=True
         )
-
         return
 
-    # Remote:
-    # controller goes to the services queue;
-    # train/evaluate go to the execution queue.
+    # On the user's machine:
+    # submit the controller and return immediately.
     #
-    # wait=False lets the original submitting process return immediately.
+    # On the services agent:
+    # keep the controller alive until the entire pipeline finishes.
+    running_locally = Task.running_locally()
+
     pipe.start(
         queue=args.controller_queue,
-        wait=False,
+        wait=not running_locally,
     )
 
-    print(
-        f"Submitted pipeline controller: {pipe.id}"
-    )
+    if running_locally:
+        print(
+            f"Submitted pipeline controller: {pipe.id}"
+        )
 
 
 if __name__ == "__main__":
