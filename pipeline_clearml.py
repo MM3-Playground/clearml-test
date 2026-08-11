@@ -58,7 +58,7 @@ def _materialize_manifests(manifest_task_id,root,dest):
         out[key]=str(target.resolve())
     return out
 
-@PipelineDecorator.component(name='train',return_values=['training'],cache=False,execution_queue=DEFAULT_QUEUE,docker=DEFAULT_DOCKER,repo='.',packages=False)
+@PipelineDecorator.component(name='train',return_values=['training'],cache=False,execution_queue=DEFAULT_QUEUE,docker=DEFAULT_DOCKER,packages=False)
 def train_component(dataset_id:str,persistent_dataset_path:str,manifest_task_id:str,clearml_project_name:str,clearml_task_name:str,run_name:str,model:str,image_size:int,batch_size:int,workers:int,n_epochs:int,lr:float,factor:float,patience:int):
     import json,subprocess,sys
     from pathlib import Path
@@ -70,7 +70,7 @@ def train_component(dataset_id:str,persistent_dataset_path:str,manifest_task_id:
     if dataset_id: cmd += ['--clearml_dataset_id',dataset_id]
     subprocess.run(cmd,check=True); result=json.loads((save/'training-result.json').read_text()); result['dataset_mode']=mode; return result
 
-@PipelineDecorator.component(name='evaluate',return_values=['evaluation'],cache=False,execution_queue=DEFAULT_QUEUE,docker=DEFAULT_DOCKER,repo='.',packages=False)
+@PipelineDecorator.component(name='evaluate',return_values=['evaluation'],cache=False,execution_queue=DEFAULT_QUEUE,docker=DEFAULT_DOCKER,packages=False)
 def evaluate_component(dataset_id:str,persistent_dataset_path:str,manifest_task_id:str,training:dict,clearml_project_name:str,clearml_task_name:str,model:str,image_size:int,minimum_accuracy:float):
     import json,subprocess,sys
     from pathlib import Path
@@ -80,7 +80,7 @@ def evaluate_component(dataset_id:str,persistent_dataset_path:str,manifest_task_
     subprocess.run([sys.executable,'-u','eval.py','--iut_paths_file',manifests['test'],'--image_size',str(image_size),'--out_dir',str(out),'--model',model,'--load_path',str(model_path),'--device','cpu','--clearml_project_name',clearml_project_name,'--clearml_task_name',f'{clearml_task_name}-evaluation','--parent_training_task_id',str(training['training_task_id'])],check=True)
     r=json.loads((out/'result.json').read_text()); r['minimum_accuracy']=float(minimum_accuracy); r['accepted']=float(r['accuracy'])>=float(minimum_accuracy); r['dataset_mode']=mode; task.get_logger().report_single_value('accepted',int(r['accepted'])); return r
 
-@PipelineDecorator.pipeline(name='clearml-training-pipeline',project='ClearML Pipelines',version='4.0.0',default_queue=DEFAULT_QUEUE,pipeline_execution_queue=DEFAULT_QUEUE,abort_on_failure=True,repo='.',packages=False,docker=DEFAULT_DOCKER)
+@PipelineDecorator.pipeline(name='clearml-training-pipeline',project='ClearML Pipelines',version='4.0.0',default_queue=DEFAULT_QUEUE,pipeline_execution_queue=DEFAULT_QUEUE,abort_on_failure=True,packages=False,docker=DEFAULT_DOCKER)
 def training_pipeline(dataset_id:str='',persistent_dataset_path:str='',manifest_task_id:str='',clearml_project_name:str='clearml-orchestration-demo',clearml_task_name:str='cpu-demo',run_name:str='cpu-demo',model:str='ours',image_size:int=128,batch_size:int=1,workers:int=0,n_epochs:int=2,lr:float=.001,factor:float=.9,patience:int=5,minimum_accuracy:float=0.0):
     tr=train_component(dataset_id,persistent_dataset_path,manifest_task_id,clearml_project_name,clearml_task_name,run_name,model,image_size,batch_size,workers,n_epochs,lr,factor,patience)
     return evaluate_component(dataset_id,persistent_dataset_path,manifest_task_id,tr,clearml_project_name,clearml_task_name,model,image_size,minimum_accuracy)
