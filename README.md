@@ -1,30 +1,56 @@
-# Detecting Stable Diffusion Generated Images Using Frequency Artifacts: A Case Study on Disney-Style Art
+## Manifest bootstrap
 
-[![Live Demo](https://img.shields.io/badge/demo-live-blue)](https://zjbthomas.github.io/FreqAIDetector/)
+Private manifest files are uploaded once:
 
+```bash
+python pipeline_clearml.py manifests --config configs/manifests.example.json
+```
 
-This is the repository for paper [Detecting Stable Diffusion Generated Images Using Frequency Artifacts: A Case Study on Disney-Style Art](https://ieeexplore.ieee.org/abstract/document/10221905) accepted to ICIP 2023.
+A manifest line is:
 
-![network structure](./github/network.png)
+```text
+train/real/001.png<TAB>0
+train/fake/002.png<TAB>1
+```
 
-## Datasets
+If these are already relative to the dataset root, keep `dataset_root` as `""` in `manifests.example.json`.
 
-The dataset we constructed in Section 3.1 of our paper can be downloaded [here](https://www.dropbox.com/scl/fi/vyk9bi7df6hp46md6mkxg/DisneyDataset.zip?rlkey=4wrahu4usf6g372lhyhdh8bmj&st=wnia1liw&dl=0).
+## Dataset modes
 
-## Checkpoints
+### Ordinary ClearML dataset
 
-Our trained model can be found [here](./checkpoints/ours.pth).
+Set `dataset_id` and leave `persistent_dataset_path` empty. The component calls `Dataset.get(...).get_local_copy()`.
 
-## ONNX
+### Administrator-provisioned persistent dataset
 
-An ONNX version of our trained model can be found [here](./deploy/AWS/Lambda/model.onnx), with inference script [here](./deploy/onnx/onnx_infer.py).
+Pre-download it on the worker VM, for example under:
 
-## Model Context Protocol (MCP)
+```text
+<vm-path>/persistent-data/anime-dataset
+```
 
-An MCP Server is implemented [here](./deploy/MCP/) as a *Tool* that allows LLMs to analyze images and determine if they are AI-generated.
+Expose the parent directory read-only to every task container:
 
-- MCP Server URL: https://175.178.11.87/freqaidetector-mcp
-- Transport: Streamable HTTP
-- Authentication: No
+```yaml
+CLEARML_AGENT_EXTRA_DOCKER_ARGS: >-
+  -v <vm-path>/persistent-data:/workspace/persistent-data:ro
+```
 
-> **Note:** ChatGPT currently cannot connect to this MCP Server because it does not support IP-based endpoints; a domain-hosted version compatible with ChatGPT connectors is under development.
+Then set:
+
+```json
+"dataset_id": "",
+"persistent_dataset_path": "/workspace/persistent-data/anime-dataset"
+```
+
+The pipeline does **not** call `get_local_copy()` for this mode.
+
+## Files
+
+- `pipeline_clearml.py` — one pipeline; `--mode local|remote`
+- `train_torch_test.py` — shared demo trainer
+- `eval.py` — shared evaluator
+- `configs/run.example.json` — normal dataset example
+- `configs/persistent.example.json` — pre-provisioned dataset example
+- `configs/manifests.example.json` — one-time manifest upload
+- `compose.worker.example.yaml` / `Dockerfile.agent` — ClearML worker

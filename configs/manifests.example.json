@@ -1,0 +1,8 @@
+{
+  "clearml_project_name": "clearml-orchestration-demo",
+  "task_name": "manifest-bundle",
+  "train_paths_file": "E:\\eDocs\\SFU\\MLOps\\clearml-test\\train.txt",
+  "val_paths_file": "E:\\eDocs\\SFU\\MLOps\\clearml-test\\val.txt",
+  "test_paths_file": "E:\\eDocs\\SFU\\MLOps\\clearml-test\\test.txt",
+  "dataset_root": ""
+}

@@ -103,6 +103,7 @@ def parse_args():
     parser.add_argument("--clearml_project_name", type=str, help="ClearML project name")
     parser.add_argument("--clearml_task_name", type=str, help="ClearML task name")
     parser.add_argument("--clearml_dataset_name", type=str, help="ClearML dataset name")
+    parser.add_argument("--clearml_dataset_id", type=str, help="ClearML dataset ID")
     
     args = parser.parse_args()
 

@@ -1,0 +1,17 @@
+{
+  "dataset_id": "CLEARML_DATASET_ID",
+  "persistent_dataset_path": "",
+  "manifest_task_id": "MANIFEST_TASK_ID",
+  "clearml_project_name": "clearml-orchestration-demo",
+  "clearml_task_name": "training-demo",
+  "run_name": "demo",
+  "model": "ours",
+  "image_size": 128,
+  "batch_size": 1,
+  "workers": 0,
+  "n_epochs": 2,
+  "lr": 0.001,
+  "factor": 0.9,
+  "patience": 5,
+  "minimum_accuracy": 0.0
+}

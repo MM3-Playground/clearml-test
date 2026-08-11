@@ -84,7 +84,7 @@ class AnimeDataset(Dataset):
             if (global_rank == 0):
                 with open(self.save_path, 'w') as f:
                     for i in range(len(self.input_image_paths)):
-                        f.write(self.input_image_paths[i] + str(self.labels[i]) + '\n')
+                        f.write(self.input_image_paths[i] + '\t' + str(self.labels[i]) + '\n')
 
                 print('Final paths file (%s) for %s saved to %s' % (('train' if not val else 'val'), str(id), self.save_path))
 
@@ -94,7 +94,7 @@ class AnimeDataset(Dataset):
             with open(iut_paths_file, 'r') as f:
                 lines = f.readlines()
                 for l in lines:
-                    parts = l.rstrip().split(' ')
+                    parts = l.rstrip().split('\t')
                     self.input_image_paths.append(parts[0])
                     self.labels.append(int(parts[1]))
 

@@ -1,0 +1,12 @@
+clearml>=2.0
+numpy
+opencv-python-headless
+pandas
+scikit-learn
+matplotlib
+tqdm
+albumentations
+timm
+tensorboard
+torch
+torchvision
