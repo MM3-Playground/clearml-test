@@ -1,3 +1,5 @@
+import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -35,20 +37,148 @@ def read_manifest(path):
     return rows
 
 
+def _materialize_external_link_dataset(
+    dataset,
+    dataset_id,
+):
+    """
+    Workaround for ClearML external-link-only datasets.
+
+    On the current Dockerized ClearML worker, Dataset.get_local_copy()
+    successfully downloads HTTPS objects into ClearML's StorageManager
+    cache, but the assembled dataset directory remains empty.
+
+    We therefore:
+      1. let ClearML StorageManager resolve/cache each external URL;
+      2. create our own dataset-relative view under /tmp;
+      3. symlink the cached files into their registered relative paths.
+
+    Researchers do not need to call StorageManager themselves.
+    """
+
+    from clearml import StorageManager, Task
+
+    task = Task.current_task()
+
+    task_id = (
+        task.id
+        if task is not None
+        else "local"
+    )
+
+    root = (
+        Path(tempfile.gettempdir())
+        / "clearml-external-datasets"
+        / task_id
+        / dataset_id
+    )
+
+    # This directory is task-specific, so recreating it is safe.
+    if root.exists():
+        shutil.rmtree(root)
+
+    root.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    link_entries = dataset.link_entries_dict
+
+    if not link_entries:
+        raise RuntimeError(
+            f"Dataset {dataset_id} has no external link entries"
+        )
+
+    print(
+        f"[dataset] materializing "
+        f"{len(link_entries)} external links into {root}"
+    )
+
+    for relative_path, entry in link_entries.items():
+        remote_url = str(entry.link)
+
+        cached_file = StorageManager.get_local_copy(
+            remote_url=remote_url,
+        )
+
+        if not cached_file:
+            raise RuntimeError(
+                f"Failed to retrieve external dataset file: "
+                f"{remote_url}"
+            )
+
+        cached_file = Path(
+            cached_file
+        ).resolve()
+
+        if not cached_file.is_file():
+            raise FileNotFoundError(
+                f"ClearML StorageManager returned {cached_file}, "
+                "but it is not a file"
+            )
+
+        destination = (
+            root
+            / relative_path
+        )
+
+        destination.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        # Prefer a symlink so we do not duplicate the cached data.
+        #
+        # We already verified that the ClearML task/container environment
+        # can create and follow symlinks under its cache filesystem.
+        try:
+            destination.symlink_to(
+                cached_file
+            )
+        except OSError:
+            # Defensive fallback in case a different worker filesystem
+            # does not permit symlinks.
+            shutil.copy2(
+                cached_file,
+                destination,
+            )
+
+    materialized_files = [
+        str(path.relative_to(root))
+        for path in root.rglob("*")
+        if path.is_file()
+    ]
+
+    print(
+        f"[dataset] materialized files="
+        f"{materialized_files[:20]}"
+    )
+
+    if len(materialized_files) != len(link_entries):
+        raise RuntimeError(
+            f"Dataset {dataset_id} has {len(link_entries)} link entries "
+            f"but only {len(materialized_files)} files were materialized"
+        )
+
+    return root
+
+
 def resolve_dataset_root(
     dataset_id="",
     persistent_dataset_path="",
 ):
     from clearml import Dataset
 
-    # ---------------------------------------------------------
-    # Administrator-provisioned persistent dataset
-    # ---------------------------------------------------------
+    # =========================================================
+    # Mode 1: administrator-provisioned persistent dataset
+    # =========================================================
     #
-    # The dataset is already physically downloaded on the worker
-    # and mounted into the task container.
+    # Already downloaded onto the worker VM and mounted into
+    # task containers, e.g.
     #
-    # Do NOT ask ClearML to download anything in this mode.
+    # /workspace/persistent-data/my-dataset
+    #
+    # No ClearML download occurs.
     #
     if persistent_dataset_path:
         root = Path(
@@ -66,9 +196,9 @@ def resolve_dataset_root(
 
         return root, "persistent"
 
-    # ---------------------------------------------------------
-    # Normal ClearML Dataset
-    # ---------------------------------------------------------
+    # =========================================================
+    # Mode 2: normal ClearML Dataset
+    # =========================================================
 
     dataset_id = str(
         dataset_id or ""
@@ -90,16 +220,45 @@ def resolve_dataset_root(
         alias="dataset",
     )
 
-    # ClearML's Dataset consists of external HTTPS links in our
-    # test case.
+    file_entries = dataset.file_entries_dict
+    link_entries = dataset.link_entries_dict
+
+    print(
+        f"[dataset] file entries={len(file_entries)}"
+    )
+
+    print(
+        f"[dataset] link entries={len(link_entries)}"
+    )
+
+    # =========================================================
+    # External-link-only dataset
+    # =========================================================
     #
-    # The underlying HTTP objects are downloaded into ClearML's
-    # storage cache. On Linux, get_local_copy() can construct the
-    # dataset view using symbolic links to those cached objects.
+    # This is the case for your current Alliance Swift dataset:
     #
-    # We deliberately use soft links here instead of
-    # get_mutable_local_copy(), because the latter depends on the
-    # assembled local dataset copy anyway.
+    # file_entries == 0
+    # link_entries == 12
+    #
+    # ClearML 2.1.11 on this Docker worker downloads the HTTPS
+    # objects into StorageManager's cache but does not assemble the
+    # Dataset.get_local_copy() directory.
+    #
+    if not file_entries and link_entries:
+        root = _materialize_external_link_dataset(
+            dataset=dataset,
+            dataset_id=dataset_id,
+        )
+
+        return root.resolve(), "clearml_external"
+
+    # =========================================================
+    # Ordinary ClearML-managed dataset
+    # =========================================================
+    #
+    # For datasets containing uploaded/managed files, use the
+    # normal ClearML Dataset API.
+    #
     root = Path(
         dataset.get_local_copy(
             use_soft_links=True,
@@ -107,26 +266,24 @@ def resolve_dataset_root(
         )
     ).resolve()
 
-    print(
-        f"[dataset] local root={root}"
-    )
-
-    downloaded_files = [
+    files = [
         str(path.relative_to(root))
         for path in root.rglob("*")
         if path.is_file()
     ]
 
     print(
-        f"[dataset] local files="
-        f"{downloaded_files[:20]}"
+        f"[dataset] local root={root}"
     )
 
-    if not downloaded_files:
+    print(
+        f"[dataset] local files={files[:20]}"
+    )
+
+    if not files:
         raise RuntimeError(
             f"ClearML Dataset {dataset_id} resolved to "
-            f"{root}, but the assembled dataset directory "
-            "contains no files"
+            f"{root}, but contains no materialized files"
         )
 
     return root, "clearml"
@@ -166,8 +323,8 @@ def materialize_manifests(
 
     result = {}
 
-    # Support both the current manifest uploader and the older
-    # manifest Tasks created during the previous tests.
+    # Support both naming conventions used by manifest Tasks
+    # created during our ClearML testing.
     artifact_candidates = {
         "train": [
             "train_manifest",
@@ -194,7 +351,7 @@ def materialize_manifests(
         )
 
         if artifact_name is None:
-            # Validation is allowed to be absent.
+            # Validation manifests may legitimately be absent.
             if kind == "val":
                 continue
 
@@ -214,22 +371,22 @@ def materialize_manifests(
             f"using artifact {artifact_name!r}"
         )
 
-        src = Path(
+        source = Path(
             source_task.artifacts[
                 artifact_name
             ].get_local_copy()
         )
 
-        dst = (
+        destination = (
             out_dir
             / f"{kind}.txt"
         )
 
-        with dst.open(
+        with destination.open(
             "w",
             encoding="utf-8",
         ) as handle:
-            for raw_path, label in read_manifest(src):
+            for raw_path, label in read_manifest(source):
                 path = Path(
                     raw_path
                 ).expanduser()
@@ -248,7 +405,7 @@ def materialize_manifests(
                 )
 
         result[kind] = str(
-            dst.resolve()
+            destination.resolve()
         )
 
     return result
