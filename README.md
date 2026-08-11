@@ -154,3 +154,17 @@ Important details:
 - `configs/persistent.example.json` — pre-provisioned persistent dataset example
 - `configs/manifests.example.json` — one-time manifest upload
 - `compose.worker.example.yaml` / `Dockerfile.agent` — ClearML worker deployment
+
+## ClearML component packaging note
+
+ClearML turns each `@PipelineDecorator.component` into a standalone remotely executed task. Remote component functions therefore must not depend on arbitrary globals from `pipeline_clearml.py`.
+
+Shared runtime helpers are kept in `pipeline_helpers.py`, which is part of the cloned Git repository. Each remote component imports the helpers **inside the component function**:
+
+```python
+from pipeline_helpers import materialize_manifests, resolve_dataset_root
+```
+
+The component also imports every standard-library module it uses (`os`, `json`, `subprocess`, `sys`, and `Path`) inside the function. This avoids missing-global errors in ClearML-generated component scripts.
+
+`from __future__ import annotations` is intentionally not used in this demo because ClearML generates standalone component source and a future import copied into generated code may no longer be at the beginning of that generated module.

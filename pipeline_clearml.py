@@ -1,3 +1,4 @@
+
 import json
 import os
 import subprocess
@@ -108,36 +109,6 @@ def upload_manifest_bundle(config):
     return task.id
 
 
-def _resolve_dataset_root(dataset_id, persistent_dataset_path):
-    if persistent_dataset_path:
-        path = Path(persistent_dataset_path).expanduser().resolve()
-        if not path.is_dir():
-            raise FileNotFoundError(f"Persistent dataset is not available: {path}")
-        return path, "persistent"
-    if not dataset_id:
-        raise ValueError("Either dataset_id or persistent_dataset_path is required")
-    dataset = Dataset.get(dataset_id=dataset_id, alias="dataset", overridable=True)
-    return Path(dataset.get_local_copy()).resolve(), "clearml"
-
-
-def _materialize_manifests(manifest_task_id, root, dest):
-    task = Task.get_task(task_id=manifest_task_id)
-    dest.mkdir(parents=True, exist_ok=True)
-    output = {}
-    for key, filename in [("train", "train.txt"), ("val", "val.txt"), ("test", "test.txt")]:
-        source = Path(task.artifacts[f"manifest_{key}_paths_file"].get_local_copy())
-        target = dest / filename
-        with target.open("w", encoding="utf-8") as handle:
-            for raw in source.read_text(encoding="utf-8").splitlines():
-                if not raw.strip():
-                    continue
-                relative, label = raw.rstrip().split("\t", 1)
-                path = Path(relative).expanduser()
-                actual = path if path.is_absolute() else root / path
-                handle.write(f"{actual.resolve()}\t{label}\n")
-        output[key] = str(target.resolve())
-    return output
-
 
 @PipelineDecorator.component(
     name="train",
@@ -166,18 +137,21 @@ def train_component(
     patience: int,
 ):
     import json
+    import os
     import subprocess
     import sys
     from pathlib import Path
+
     from clearml import Task
+    from pipeline_helpers import materialize_manifests, resolve_dataset_root
 
     task = Task.current_task()
-    root, mode = _resolve_dataset_root(dataset_id, persistent_dataset_path)
+    root, mode = resolve_dataset_root(dataset_id, persistent_dataset_path)
     task.set_parameter("dataset/mode", mode)
     task.set_parameter("dataset/id", dataset_id)
     task.set_parameter("dataset/persistent_path", persistent_dataset_path)
     work = Path(os.getenv("TMPDIR", "/tmp")) / "clearml-pipeline" / task.id
-    manifests = _materialize_manifests(manifest_task_id, root, work / "manifests")
+    manifests = materialize_manifests(manifest_task_id, root, work / "manifests")
     save = work / "runs"
     cmd = [
         sys.executable,
@@ -242,15 +216,18 @@ def evaluate_component(
     minimum_accuracy: float,
 ):
     import json
+    import os
     import subprocess
     import sys
     from pathlib import Path
+
     from clearml import InputModel, Task
+    from pipeline_helpers import materialize_manifests, resolve_dataset_root
 
     task = Task.current_task()
-    root, mode = _resolve_dataset_root(dataset_id, persistent_dataset_path)
+    root, mode = resolve_dataset_root(dataset_id, persistent_dataset_path)
     work = Path(os.getenv("TMPDIR", "/tmp")) / "clearml-pipeline" / task.id
-    manifests = _materialize_manifests(manifest_task_id, root, work / "manifests")
+    manifests = materialize_manifests(manifest_task_id, root, work / "manifests")
     model_path = InputModel(model_id=training["model_id"]).get_local_copy()
     out = work / "evaluation"
     subprocess.run(
@@ -290,7 +267,7 @@ def evaluate_component(
 @PipelineDecorator.pipeline(
     name=PIPELINE_NAME,
     project=PIPELINE_PROJECT,
-    version="5.0.0",
+    version="5.1.0",
     default_queue=DEFAULT_QUEUE,
     pipeline_execution_queue=DEFAULT_QUEUE,
     abort_on_failure=True,
