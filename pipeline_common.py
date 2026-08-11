@@ -32,28 +32,130 @@ def resolve_dataset_root(dataset_id="", persistent_dataset_path=""):
     return Path(dataset.get_local_copy()).resolve(), "clearml"
 
 
-def materialize_manifests(manifest_task_id, dataset_root, output_dir=None):
+def materialize_manifests(
+    manifest_task_id,
+    dataset_root,
+    output_dir=None,
+):
+    from pathlib import Path
+
     from clearml import Task
 
     if not manifest_task_id:
-        raise ValueError("manifest_task_id is required")
-    source_task = Task.get_task(task_id=manifest_task_id)
-    out_dir = Path(output_dir or tempfile.mkdtemp(prefix="clearml-manifests-"))
-    out_dir.mkdir(parents=True, exist_ok=True)
+        raise ValueError(
+            "manifest_task_id is required"
+        )
+
+    source_task = Task.get_task(
+        task_id=manifest_task_id
+    )
+
+    dataset_root = Path(
+        dataset_root
+    ).expanduser().resolve()
+
+    if output_dir is None:
+        output_dir = Path.cwd() / "manifests"
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    # Support both the current uploader and manifest Tasks
+    # produced by previous versions of this demo.
+    artifact_candidates = {
+        "train": [
+            "train_manifest",
+            "manifest_train_paths_file",
+        ],
+        "val": [
+            "val_manifest",
+            "manifest_val_paths_file",
+        ],
+        "test": [
+            "test_manifest",
+            "manifest_test_paths_file",
+        ],
+    }
+
     result = {}
 
-    for kind in ("train", "val", "test"):
-        artifact_name = f"{kind}_manifest"
-        if artifact_name not in source_task.artifacts:
-            if kind == "val":
-                continue
-            raise KeyError(f"Manifest task {manifest_task_id} has no artifact {artifact_name!r}")
-        src = Path(source_task.artifacts[artifact_name].get_local_copy())
-        dst = out_dir / f"{kind}.txt"
-        with dst.open("w", encoding="utf-8") as handle:
-            for raw_path, label in read_manifest(src):
-                p = Path(raw_path).expanduser()
-                actual = p if p.is_absolute() else Path(dataset_root) / p
-                handle.write(f"{actual.resolve()}\t{label}\n")
-        result[kind] = str(dst.resolve())
+    for kind, candidates in artifact_candidates.items():
+        artifact_name = next(
+            (
+                name
+                for name in candidates
+                if name in source_task.artifacts
+            ),
+            None,
+        )
+
+        if artifact_name is None:
+            available = sorted(
+                source_task.artifacts.keys()
+            )
+
+            raise KeyError(
+                f"Manifest task {manifest_task_id} "
+                f"has no artifact for {kind!r}. "
+                f"Expected one of {candidates}; "
+                f"available artifacts: {available}"
+            )
+
+        print(
+            f"[manifests] {kind}: "
+            f"using artifact {artifact_name!r}"
+        )
+
+        source = Path(
+            source_task.artifacts[
+                artifact_name
+            ].get_local_copy()
+        )
+
+        target = (
+            output_dir
+            / f"{kind}.txt"
+        )
+
+        with target.open(
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            for raw in source.read_text(
+                encoding="utf-8"
+            ).splitlines():
+                if not raw.strip():
+                    continue
+
+                relative_path, label = (
+                    raw.rstrip().split(
+                        "\t",
+                        1,
+                    )
+                )
+
+                path = Path(
+                    relative_path
+                ).expanduser()
+
+                if path.is_absolute():
+                    actual = path
+                else:
+                    actual = (
+                        dataset_root
+                        / path
+                    )
+
+                handle.write(
+                    f"{actual.resolve()}"
+                    f"\t{label}\n"
+                )
+
+        result[kind] = str(
+            target.resolve()
+        )
+
     return result
