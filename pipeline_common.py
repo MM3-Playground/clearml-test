@@ -28,7 +28,7 @@ def resolve_dataset_root(dataset_id="", persistent_dataset_path=""):
     if not dataset_id:
         raise ValueError("Either dataset_id or persistent_dataset_path is required")
 
-    dataset = Dataset.get(dataset_id=dataset_id, alias="dataset", overridable=True)
+    dataset = Dataset.get(dataset_id=dataset_id, alias="dataset")
     return Path(dataset.get_local_copy()).resolve(), "clearml"
 
 
