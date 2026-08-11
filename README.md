@@ -1,3 +1,49 @@
+# ClearML pipeline orchestration — unified codebase
+
+## Required for remote mode: run from a Git checkout
+
+The remote ClearML mode is Git-native. Run the bootstrap command from an actual Git repository that has a reachable remote and a committed/pushed revision. The worker uses the repository metadata recorded by ClearML to clone the code.
+
+Check before launching:
+
+```bash
+git rev-parse --show-toplevel
+git remote -v
+git status
+git rev-parse HEAD
+```
+
+If this ZIP was only extracted into a normal directory, ClearML cannot infer a repository from it. Put the files in the intended Git repository, commit them, and push the commit before using remote mode.
+
+
+This project uses **one decorated ClearML pipeline and one training/evaluation implementation** for both execution models.
+
+## 1. Alliance / Slurm: execute locally, ClearML tracks
+
+Submit the repository with your normal `sbatch` script and, inside the allocation, run:
+
+```bash
+python pipeline_clearml.py run --mode local --config configs/run.example.json
+```
+
+`PipelineDecorator.run_locally()` keeps the decorated DAG on the current machine/allocation. No ClearML Agent/queue is used for the pipeline components. ClearML still tracks tasks if the Alliance node can reach the ClearML server.
+
+For Alliance storage, set `persistent_dataset_path` to the dataset path visible in the allocation (and leave `dataset_id` empty) when you do not want ClearML to download data. The same manifest contract is used: paths in the manifest are relative to the selected dataset root.
+
+> The demo trainer in this package is deliberately CPU/single-process so it can also run on the test VM. For a real GPU/Slurm research trainer, replace the internals of `train_torch_test.py` with the research training implementation; the pipeline/orchestration code does not need to fork into a second workflow.
+
+## 2. ClearML worker: bootstrap once, then use the UI
+
+From a Git checkout that has been committed and pushed:
+
+```bash
+python pipeline_clearml.py run --mode remote --queue default --config configs/run.example.json
+```
+
+The bootstrap task is handed to the ClearML queue; the laptop does not perform training. The component decorators use `repo="."` and `packages=False`, so ClearML records the repository/commit and the Agent uses the repository `requirements.txt`.
+
+After the pipeline has been captured, researchers normally use **Pipelines → clearml-training-pipeline → + NEW RUN** and edit the exposed pipeline parameters in the UI.
+
 ## Manifest bootstrap
 
 Private manifest files are uploaded once:
