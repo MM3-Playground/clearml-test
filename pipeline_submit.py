@@ -212,14 +212,12 @@ def _get_pipeline_value(pipeline, name):
 
 def inject_pipeline_parameters(pipeline, node, parameters):
     """
-    Called after ClearML creates a step Task but before enqueueing it.
+    Override the generated step Task arguments before the job is created.
 
-    We explicitly copy the effective pipeline values into Args/* on the
-    generated function Task.
-
-    This avoids depending on the function-step interpolation that was
-    producing dataset_id='' in the generated train Task.
+    In ClearML 2.1.11, node.job can still be None here, so modify the
+    parsed parameters dictionary directly instead.
     """
+
     if node.name == "train":
         names = TRAIN_PIPELINE_PARAMETERS
     elif node.name == "evaluate":
@@ -227,42 +225,44 @@ def inject_pipeline_parameters(pipeline, node, parameters):
     else:
         return True
 
-    task = node.job.task
+    pipeline_params = pipeline.get_parameters() or {}
+
+    def get_value(name):
+        for key in (
+            name,
+            f"pipeline/{name}",
+            f"Pipeline/{name}",
+        ):
+            if key in pipeline_params:
+                return pipeline_params[key]
+
+        raise KeyError(
+            f"Pipeline parameter {name!r} not found. "
+            f"Available parameters: {pipeline_params}"
+        )
 
     print(f"[pipeline] preparing step {node.name!r}")
+    print(f"[pipeline] parameters before override: {parameters!r}")
 
     for name in names:
-        value = _get_pipeline_value(
-            pipeline,
-            name,
-        )
+        value = get_value(name)
 
         print(
             f"[pipeline] {node.name}: "
             f"Args/{name} = {value!r}"
         )
 
-        task.set_parameter(
-            name=f"Args/{name}",
-            value=value,
-        )
+        # These are the hyperparameters that will be used to create
+        # the standalone function Task.
+        parameters[f"Args/{name}"] = value
 
-    # Useful hard failure instead of allowing Dataset.get("") later.
     if node.name == "train":
         dataset_id = str(
-            _get_pipeline_value(
-                pipeline,
-                "dataset_id",
-            )
-            or ""
+            get_value("dataset_id") or ""
         ).strip()
 
         persistent_path = str(
-            _get_pipeline_value(
-                pipeline,
-                "persistent_dataset_path",
-            )
-            or ""
+            get_value("persistent_dataset_path") or ""
         ).strip()
 
         if not dataset_id and not persistent_path:
@@ -270,6 +270,8 @@ def inject_pipeline_parameters(pipeline, node, parameters):
                 "Pipeline has neither dataset_id nor "
                 "persistent_dataset_path"
             )
+
+    print(f"[pipeline] parameters after override: {parameters!r}")
 
     return True
 
