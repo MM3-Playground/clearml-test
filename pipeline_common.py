@@ -34,11 +34,17 @@ def resolve_dataset_root(dataset_id="", persistent_dataset_path=""):
     )
 
     # TEMPORARY DEBUGGING
-    files = dataset.list_files()
+    print(
+        f"[dataset] file entries={len(dataset.file_entries_dict)}"
+    )
+    print(
+        f"[dataset] link entries={len(dataset.link_entries_dict)}"
+    )
 
-    print(f"[dataset] id={dataset_id}")
-    print(f"[dataset] number of files={len(files)}")
-    print(f"[dataset] first files={files[:20]}")
+    for path, entry in list(dataset.link_entries_dict.items())[:20]:
+        print(
+            f"[dataset] link: {path!r} -> {entry}"
+        )
 
     root = Path(
         dataset.get_local_copy(
