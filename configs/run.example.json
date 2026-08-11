@@ -1,10 +1,13 @@
 {
-  "dataset_id": "CLEARML_DATASET_ID",
+  "execution_backend": "worker_cpu",
+  "dataset_id": "",
+  "dataset_project": "",
+  "dataset_name": "",
   "persistent_dataset_path": "",
-  "manifest_task_id": "MANIFEST_TASK_ID",
+  "manifest_task_id": "",
   "clearml_project_name": "clearml-orchestration-demo",
-  "clearml_task_name": "training-demo",
-  "run_name": "demo",
+  "clearml_task_name": "cpu-demo",
+  "run_name": "cpu-demo",
   "model": "ours",
   "image_size": 128,
   "batch_size": 1,
@@ -13,5 +16,6 @@
   "lr": 0.001,
   "factor": 0.9,
   "patience": 5,
-  "minimum_accuracy": 0.0
+  "minimum_accuracy": 0.0,
+  "input_model_id": ""
 }

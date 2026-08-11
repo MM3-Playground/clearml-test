@@ -8,7 +8,6 @@ from tqdm import tqdm
 from matplotlib import pyplot as plt
 import csv
 import random
-import json
 import pandas as pd
 from pathlib import Path
 
@@ -96,10 +95,6 @@ def parse_args():
     
     parser.add_argument('--model', default='xception', choices=['xception', 'cnndct','cnnpixel','ours'], help='model selection')
     parser.add_argument('--load_path', type=str, help='path to the pretrained model', default="checkpoints/model.pth")
-    parser.add_argument('--clearml_project_name', type=str)
-    parser.add_argument('--clearml_task_name', type=str, default='evaluation')
-    parser.add_argument('--parent_training_task_id', type=str)
-    parser.add_argument('--device', type=str, default='auto', choices=['auto', 'cpu', 'cuda'])
     
     args = parser.parse_args()
     return args
@@ -107,16 +102,8 @@ def parse_args():
 if __name__ == '__main__':
     args = parse_args()
 
-    from clearml import Task
-    task = Task.init(project_name=args.clearml_project_name, task_name=args.clearml_task_name, task_type=Task.TaskTypes.testing, output_uri=True)
-    if args.parent_training_task_id:
-        task.set_parameter('pipeline/parent_training_task_id', args.parent_training_task_id)
-
     # load model
-    if args.device == "auto":
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = torch.device(args.device)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if (args.model == 'xception'):
         model = Xception().to(device)
@@ -225,10 +212,3 @@ if __name__ == '__main__':
     save_cm(y_true, y_pred, save_path)
 
     if (args.subset is None): f_csv.close()
-
-    accuracy = float(accuracy_score(y_true, y_pred))
-    Path(args.out_dir).mkdir(parents=True, exist_ok=True)
-    (Path(args.out_dir) / 'result.json').write_text(json.dumps({'accuracy': accuracy, 'evaluation_task_id': task.id}, indent=2), encoding='utf-8')
-    task.get_logger().report_single_value('accuracy', accuracy)
-    task.upload_artifact('evaluation-output', artifact_object=args.out_dir, wait_on_upload=True)
-    task.close()

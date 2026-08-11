@@ -1,170 +1,161 @@
-# ClearML pipeline orchestration — unified codebase
+# ClearML orchestration test — recovered research code
 
-This repository uses the **same training/evaluation code and the same ClearML-decorated DAG** in two modes:
+This package intentionally keeps the uploaded research implementation intact and layers ClearML orchestration around it.
 
-1. **Alliance / Slurm / local mode** — execute the DAG on the current machine/allocation. ClearML tracks the run, but no ClearML worker executes it.
-2. **ClearML worker mode** — a user runs a lightweight bootstrap locally. The pipeline controller stays on the user's machine for that first bootstrap, while `train` and `evaluate` are submitted to ClearML queues. After the pipeline exists, users normally launch subsequent runs from **ClearML → Pipelines → + NEW RUN**.
+## What was restored
 
-## Why `bootstrap.py` and `pipeline_clearml.py` are separate
+The following come from the original `clearml-test.zip` and were restored instead of using the simplified replacements from earlier iterations:
 
-`bootstrap.py` is only the user-facing launcher. It reads the local JSON file into a Python dictionary and calls:
+- `datasets/dataset.py`
+- all original `models/`
+- all original `utils/`
+- `eval.py`
+- `train_base_test.py`
+- `train_torch_test.py`
 
-```python
-pipeline.training_pipeline(**settings)
-```
+`train_torch_test.py` has one small compatibility change only: the two `ClearMLDataset.get(...)` metadata lookups run only when `--clearml_dataset_name` is supplied. This lets an administrator-provisioned persistent dataset use its filesystem path without requiring a ClearML Dataset name. The Slurm/NCCL/DDP training path itself is unchanged.
 
-`pipeline_clearml.py` contains the actual pipeline definition and **has no required CLI arguments**. Therefore a remotely executed ClearML task never needs to reopen `configs/run.example.json`, and local uncommitted JSON changes are passed as pipeline parameter values rather than being read from the Git checkout on the worker.
+The CPU worker test is additive in `train_worker_cpu.py`; it does not replace the original Alliance trainer.
 
-Code and settings are intentionally separate:
+## Files added for ClearML orchestration
 
-```text
-Git repository + pushed commit  -> code executed by workers
-local JSON contents             -> pipeline Args / runtime settings
-```
+- `pipeline_submit.py` — defines/submits the training -> evaluation pipeline.
+- `pipeline_steps.py` — small remote step wrappers. They call the existing training/evaluation programs.
+- `pipeline_common.py` — dataset and manifest path resolution.
+- `upload_manifests.py` — one-time upload of private manifest files.
+- `train_worker_cpu.py` — CPU-only adapter used only by the non-Slurm test worker.
+- `configs/` — example local configuration files.
+- `worker/` — ClearML worker/services-agent Compose example.
+- `requirements.txt` — the single project requirements file.
 
-## Initial worker-pipeline bootstrap
+There is deliberately no `requirements-submit.txt`.
 
-From a local Git checkout whose current commit has been pushed:
+## Manifest contract
 
-```bash
-uv run bootstrap.py run \
-  --mode remote \
-  --queue default \
-  --config configs/run.example.json
-```
-
-The bootstrap process itself is lightweight. Because the pipeline decorator uses `start_controller_locally=True`, only the controller logic runs locally during this first launch; the `train` and `evaluate` components are submitted to the configured ClearML queue and run in worker task containers.
-
-After the pipeline has been created, use:
-
-```text
-ClearML → Pipelines → clearml-training-pipeline → + NEW RUN
-```
-
-The pipeline function arguments (dataset, manifest task, epochs, LR, batch size, etc.) are exposed as pipeline parameters and can be edited in the UI.
-
-## Alliance / local execution
-
-Inside the current machine or Slurm allocation:
-
-```bash
-python bootstrap.py run \
-  --mode local \
-  --config configs/run.example.json
-```
-
-`PipelineDecorator.run_locally()` executes the same decorated DAG locally. No ClearML Agent is required for execution; ClearML can still track the tasks when the machine can reach the ClearML server.
-
-## Git / requirements behavior
-
-Remote component tasks use the actual Git remote URL and exact current commit resolved when the pipeline module is imported. You can override them with:
-
-```bash
-export CLEARML_CODE_REPO=https://github.com/ORG/REPO.git
-export CLEARML_CODE_COMMIT=<sha>
-export CLEARML_CODE_BRANCH=main
-```
-
-The decorators use `packages=False`, so worker tasks use the repository-root `requirements.txt` rather than auto-capturing the user's local Python environment.
-
-Before bootstrapping remote execution, make sure the commit is pushed:
-
-```bash
-git remote get-url origin
-git rev-parse HEAD
-git ls-remote origin | grep "$(git rev-parse HEAD)"
-```
-
-## Manifest bootstrap
-
-Private manifest files are uploaded once:
-
-```bash
-uv run bootstrap.py manifests --config configs/manifests.example.json
-```
-
-Manifest entries should normally be relative to the logical dataset root:
+Manifest files contain a dataset-relative path and integer label separated by a tab:
 
 ```text
 train/real/001.png<TAB>0
 train/fake/002.png<TAB>1
 ```
 
-If they are already relative, keep:
+If the manifests are already relative, keep `dataset_root` as an empty string in `configs/manifests.example.json`.
 
-```json
-"dataset_root": ""
+Upload them once from a machine that has the files:
+
+```bash
+python upload_manifests.py --config configs/manifests.local.json
 ```
+
+The command prints a `manifest_task_id`. Put that ID in the run settings.
 
 ## Dataset modes
 
-### Ordinary ClearML dataset
+### Normal ClearML Dataset
+
+Set:
 
 ```json
-"dataset_id": "CLEARML_DATASET_ID",
-"persistent_dataset_path": ""
+{
+  "dataset_id": "CLEARML_DATASET_ID",
+  "persistent_dataset_path": ""
+}
 ```
 
-The task calls `Dataset.get(...).get_local_copy()`.
+The step calls `Dataset.get(...).get_local_copy()` inside the execution environment.
 
 ### Administrator-provisioned persistent dataset
 
-The administrator pre-downloads the dataset on a particular worker VM, for example:
+The administrator downloads the dataset beforehand to the worker VM, for example:
 
 ```text
-<vm-path>/persistent-data/anime-dataset
+/development-volume/persistent-data/anime-dataset
 ```
 
-The agent exposes the parent directory read-only to every task container:
+The worker exposes the parent directory read-only inside every task container as:
 
-```yaml
-CLEARML_AGENT_EXTRA_DOCKER_ARGS: >-
-  -v <vm-path>/persistent-data:/workspace/persistent-data:ro
+```text
+/workspace/persistent-data
 ```
 
-Then run settings use:
+The run then uses:
 
 ```json
-"dataset_id": "",
-"persistent_dataset_path": "/workspace/persistent-data/anime-dataset"
+{
+  "dataset_id": "",
+  "persistent_dataset_path": "/workspace/persistent-data/anime-dataset"
+}
 ```
 
-Persistent mode does **not** call `get_local_copy()`.
+No `get_local_copy()` is called in this mode.
 
-## Worker deployment
+## Two execution backends, one repository and one pipeline
 
-See `compose.worker.example.yaml` and `Dockerfile.agent`.
+`execution_backend` controls only the training entry point.
 
-Important details:
+### `worker_cpu`
 
-- `/var/run/docker.sock` lets the Dockerized agent create sibling task containers.
-- `CLEARML_AGENT_DOCKER_HOST_MOUNT` propagates the host-side ClearML config into spawned task containers.
-- `CLEARML_AGENT_EXTRA_DOCKER_ARGS` is used for optional mounts such as read-only persistent datasets.
-- This demo worker is CPU-only.
-- Remote fileserver access uses host port `9081` because the server publishes `9081:8081`.
+Used for the current non-Slurm CPU ClearML worker test. It calls the additive `train_worker_cpu.py`, then the original `eval.py`.
 
-## Main files
-
-- `bootstrap.py` — local CLI/bootstrap only
-- `pipeline_clearml.py` — CLI-free pipeline definition
-- `train_torch_test.py` — shared CPU demo trainer
-- `eval.py` — shared evaluator
-- `requirements.txt` — worker task dependencies
-- `configs/run.example.json` — ordinary ClearML dataset example
-- `configs/persistent.example.json` — pre-provisioned persistent dataset example
-- `configs/manifests.example.json` — one-time manifest upload
-- `compose.worker.example.yaml` / `Dockerfile.agent` — ClearML worker deployment
-
-## ClearML component packaging note
-
-ClearML turns each `@PipelineDecorator.component` into a standalone remotely executed task. Remote component functions therefore must not depend on arbitrary globals from `pipeline_clearml.py`.
-
-Shared runtime helpers are kept in `pipeline_helpers.py`, which is part of the cloned Git repository. Each remote component imports the helpers **inside the component function**:
-
-```python
-from pipeline_helpers import materialize_manifests, resolve_dataset_root
+```json
+"execution_backend": "worker_cpu"
 ```
 
-The component also imports every standard-library module it uses (`os`, `json`, `subprocess`, `sys`, and `Path`) inside the function. This avoids missing-global errors in ClearML-generated component scripts.
+### `alliance`
 
-`from __future__ import annotations` is intentionally not used in this demo because ClearML generates standalone component source and a future import copied into generated code may no longer be at the beginning of that generated module.
+Used inside an Alliance Slurm allocation. It calls the original `train_torch_test.py`, preserving its Slurm/NCCL/DDP path, then the original `eval.py`.
+
+```json
+"execution_backend": "alliance"
+```
+
+Launch locally inside the submitted Slurm job with:
+
+```bash
+python pipeline_submit.py --mode local --config configs/run.local.json
+```
+
+`start_locally(run_pipeline_steps_locally=True)` keeps both controller and steps on the current allocation. ClearML is used for tracking, not for scheduling the Alliance job.
+
+## Remote ClearML-worker mode
+
+The initial pipeline submission is:
+
+```bash
+python pipeline_submit.py --mode remote --config configs/run.local.json
+```
+
+The local JSON is read only by the initial local process. Its dictionary contents are stored as ClearML pipeline configuration and pipeline parameters. On remote controller execution, the code does not reopen the repository copy of the JSON.
+
+Remote submission uses a controller on the `services` queue and training/evaluation on the `default` queue. `wait=False` means the submitting process does not wait for dependency installation, training, or evaluation.
+
+After the initial pipeline exists, use **Pipelines -> + NEW RUN** in the ClearML UI to change the exposed pipeline parameters and launch another worker run.
+
+## Why there are two ClearML agents in the example worker Compose
+
+A pipeline controller lives for the duration of the pipeline. A normal ClearML agent handles one task at a time, so using the same single worker for the controller and its training step can block execution. The example therefore uses:
+
+- `clearml-services-agent` listening on `services` in services mode for controllers;
+- `clearml-worker` listening on `default` for training/evaluation.
+
+Before starting the example Compose, create the two agent state directories and persistent-data directory if used:
+
+```bash
+sudo mkdir -p /opt/clearml/agent /opt/clearml/agent-services
+sudo mkdir -p /development-volume/persistent-data
+```
+
+The persistent dataset directory is mounted only into task containers via `CLEARML_AGENT_EXTRA_DOCKER_ARGS`; it is read-only (`:ro`).
+
+## Git requirement for remote execution
+
+Remote Tasks execute a recorded Git remote URL and commit. Before submitting a new remote pipeline definition, commit and push code changes:
+
+```bash
+git status
+git add .
+git commit -m "Update ClearML pipeline"
+git push
+```
+
+Local JSON settings can remain gitignored because their contents are transferred through ClearML rather than relying on the repository copy.
