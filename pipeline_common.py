@@ -16,52 +16,77 @@ def read_manifest(path):
     return rows
 
 
-def resolve_dataset_root(dataset_id="", persistent_dataset_path=""):
-    from clearml import Dataset
+def resolve_dataset_root(
+    dataset_id="",
+    persistent_dataset_path="",
+):
+    from clearml import Dataset, Task
 
     if persistent_dataset_path:
-        root = Path(persistent_dataset_path).expanduser().resolve()
+        root = Path(
+            persistent_dataset_path
+        ).expanduser().resolve()
+
         if not root.is_dir():
-            raise FileNotFoundError(f"Persistent dataset is not available: {root}")
+            raise FileNotFoundError(
+                f"Persistent dataset is not available: {root}"
+            )
+
         return root, "persistent"
 
+    dataset_id = str(dataset_id or "").strip()
+
     if not dataset_id:
-        raise ValueError("Either dataset_id or persistent_dataset_path is required")
+        raise ValueError(
+            "Either dataset_id or persistent_dataset_path is required"
+        )
 
     dataset = Dataset.get(
         dataset_id=dataset_id,
         alias="dataset",
     )
 
-    # TEMPORARY DEBUGGING
-    print(
-        f"[dataset] file entries={len(dataset.file_entries_dict)}"
-    )
-    print(
-        f"[dataset] link entries={len(dataset.link_entries_dict)}"
+    task = Task.current_task()
+
+    task_id = (
+        task.id
+        if task is not None
+        else "local"
     )
 
-    for path, entry in list(dataset.link_entries_dict.items())[:20]:
-        print(
-            f"[dataset] link: {path!r} -> {entry}"
-        )
+    target = (
+        Path(tempfile.gettempdir())
+        / "clearml-datasets"
+        / task_id
+        / dataset_id
+    )
+
+    target.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    print(
+        f"[dataset] downloading Dataset {dataset_id} "
+        f"to {target}"
+    )
 
     root = Path(
-        dataset.get_local_copy(
-            use_soft_links=False,
-            raise_on_error=True,
+        dataset.get_mutable_local_copy(
+            target_folder=str(target),
+            overwrite=True,
         )
     ).resolve()
 
     print(f"[dataset] local root={root}")
-
-    if root.exists():
-        print(
-            f"[dataset] local entries="
-            f"{list(root.iterdir())[:20]}"
-        )
-    else:
-        print("[dataset] local root DOES NOT EXIST")
+    print(
+        f"[dataset] downloaded files="
+        f"{[
+            str(p.relative_to(root))
+            for p in root.rglob('*')
+            if p.is_file()
+        ][:20]}"
+    )
 
     return root, "clearml"
 
