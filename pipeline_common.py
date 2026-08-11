@@ -4,15 +4,34 @@ from pathlib import Path
 
 def read_manifest(path):
     rows = []
-    for line_no, raw in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
+
+    for line_no, raw in enumerate(
+        Path(path).read_text(encoding="utf-8").splitlines(),
+        1,
+    ):
         if not raw.strip():
             continue
+
         parts = raw.rstrip().split("\t")
+
         if len(parts) != 2:
-            raise ValueError(f"Invalid manifest line {line_no}: expected PATH<TAB>LABEL")
-        rows.append((parts[0], int(parts[1])))
+            raise ValueError(
+                f"Invalid manifest line {line_no}: "
+                "expected PATH<TAB>LABEL"
+            )
+
+        rows.append(
+            (
+                parts[0],
+                int(parts[1]),
+            )
+        )
+
     if not rows:
-        raise ValueError(f"Manifest is empty: {path}")
+        raise ValueError(
+            f"Manifest is empty: {path}"
+        )
+
     return rows
 
 
@@ -20,11 +39,17 @@ def resolve_dataset_root(
     dataset_id="",
     persistent_dataset_path="",
 ):
-    from clearml import Dataset, Task
+    from clearml import Dataset
 
-    # Persistent dataset:
-    # already downloaded by the administrator and mounted into
-    # the worker-created container. Do not ask ClearML to download it.
+    # ---------------------------------------------------------
+    # Administrator-provisioned persistent dataset
+    # ---------------------------------------------------------
+    #
+    # The dataset is already physically downloaded on the worker
+    # and mounted into the task container.
+    #
+    # Do NOT ask ClearML to download anything in this mode.
+    #
     if persistent_dataset_path:
         root = Path(
             persistent_dataset_path
@@ -35,52 +60,56 @@ def resolve_dataset_root(
                 f"Persistent dataset is not available: {root}"
             )
 
+        print(
+            f"[dataset] using persistent dataset: {root}"
+        )
+
         return root, "persistent"
 
-    # Normal ClearML dataset.
-    dataset_id = str(dataset_id or "").strip()
+    # ---------------------------------------------------------
+    # Normal ClearML Dataset
+    # ---------------------------------------------------------
+
+    dataset_id = str(
+        dataset_id or ""
+    ).strip()
 
     if not dataset_id:
         raise ValueError(
-            "Either dataset_id or persistent_dataset_path is required"
+            "Either dataset_id or "
+            "persistent_dataset_path is required"
         )
+
+    print(
+        f"[dataset] resolving ClearML Dataset "
+        f"{dataset_id}"
+    )
 
     dataset = Dataset.get(
         dataset_id=dataset_id,
         alias="dataset",
     )
 
-    task = Task.current_task()
-
-    task_id = (
-        task.id
-        if task is not None
-        else "local"
-    )
-
-    target = (
-        Path(tempfile.gettempdir())
-        / "clearml-datasets"
-        / task_id
-        / dataset_id
-    )
-
-    target.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    print(
-        f"[dataset] downloading dataset {dataset_id} "
-        f"to {target}"
-    )
-
+    # ClearML's Dataset consists of external HTTPS links in our
+    # test case.
+    #
+    # The underlying HTTP objects are downloaded into ClearML's
+    # storage cache. On Linux, get_local_copy() can construct the
+    # dataset view using symbolic links to those cached objects.
+    #
+    # We deliberately use soft links here instead of
+    # get_mutable_local_copy(), because the latter depends on the
+    # assembled local dataset copy anyway.
     root = Path(
-        dataset.get_mutable_local_copy(
-            target_folder=str(target),
-            overwrite=True,
+        dataset.get_local_copy(
+            use_soft_links=True,
+            raise_on_error=True,
         )
     ).resolve()
+
+    print(
+        f"[dataset] local root={root}"
+    )
 
     downloaded_files = [
         str(path.relative_to(root))
@@ -88,16 +117,16 @@ def resolve_dataset_root(
         if path.is_file()
     ]
 
-    print(f"[dataset] local root={root}")
     print(
-        f"[dataset] downloaded files="
+        f"[dataset] local files="
         f"{downloaded_files[:20]}"
     )
 
     if not downloaded_files:
         raise RuntimeError(
-            f"ClearML Dataset {dataset_id} was downloaded to "
-            f"{root}, but the resulting directory contains no files"
+            f"ClearML Dataset {dataset_id} resolved to "
+            f"{root}, but the assembled dataset directory "
+            "contains no files"
         )
 
     return root, "clearml"
@@ -108,8 +137,6 @@ def materialize_manifests(
     dataset_root,
     output_dir=None,
 ):
-    from pathlib import Path
-
     from clearml import Task
 
     if not manifest_task_id:
@@ -125,17 +152,22 @@ def materialize_manifests(
         dataset_root
     ).expanduser().resolve()
 
-    if output_dir is None:
-        output_dir = Path.cwd() / "manifests"
+    out_dir = Path(
+        output_dir
+        or tempfile.mkdtemp(
+            prefix="clearml-manifests-"
+        )
+    )
 
-    output_dir = Path(output_dir)
-    output_dir.mkdir(
+    out_dir.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    # Support both the current uploader and manifest Tasks
-    # produced by previous versions of this demo.
+    result = {}
+
+    # Support both the current manifest uploader and the older
+    # manifest Tasks created during the previous tests.
     artifact_candidates = {
         "train": [
             "train_manifest",
@@ -151,8 +183,6 @@ def materialize_manifests(
         ],
     }
 
-    result = {}
-
     for kind, candidates in artifact_candidates.items():
         artifact_name = next(
             (
@@ -164,6 +194,10 @@ def materialize_manifests(
         )
 
         if artifact_name is None:
+            # Validation is allowed to be absent.
+            if kind == "val":
+                continue
+
             available = sorted(
                 source_task.artifacts.keys()
             )
@@ -180,36 +214,24 @@ def materialize_manifests(
             f"using artifact {artifact_name!r}"
         )
 
-        source = Path(
+        src = Path(
             source_task.artifacts[
                 artifact_name
             ].get_local_copy()
         )
 
-        target = (
-            output_dir
+        dst = (
+            out_dir
             / f"{kind}.txt"
         )
 
-        with target.open(
+        with dst.open(
             "w",
             encoding="utf-8",
         ) as handle:
-            for raw in source.read_text(
-                encoding="utf-8"
-            ).splitlines():
-                if not raw.strip():
-                    continue
-
-                relative_path, label = (
-                    raw.rstrip().split(
-                        "\t",
-                        1,
-                    )
-                )
-
+            for raw_path, label in read_manifest(src):
                 path = Path(
-                    relative_path
+                    raw_path
                 ).expanduser()
 
                 if path.is_absolute():
@@ -226,7 +248,7 @@ def materialize_manifests(
                 )
 
         result[kind] = str(
-            target.resolve()
+            dst.resolve()
         )
 
     return result
