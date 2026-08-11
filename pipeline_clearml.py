@@ -94,12 +94,19 @@ def main():
     a=p.parse_args(); cfg=json.loads(Path(a.config).read_text())
     if a.cmd=='manifests': print(json.dumps({'manifest_task_id':upload_manifest_bundle(cfg)},indent=2)); return
     if a.mode=='local':
-        # Same decorated DAG, but components execute on this machine/allocation rather than an Agent.
+        # Same decorated DAG, but controller and components execute on this
+        # machine/allocation as local subprocess Tasks. No ClearML Agent is used.
         PipelineDecorator.run_locally()
     else:
-        # Initial bootstrap: controller is handed to the worker queue; laptop does not train.
-        task=Task.init(project_name='ClearML Pipelines',task_name='clearml-training-pipeline-bootstrap',task_type=Task.TaskTypes.controller)
-        task.execute_remotely(queue_name=a.queue,clone=False,exit_process=False)
+        # Remote mode is already provided by @PipelineDecorator.pipeline via
+        # pipeline_execution_queue. Do NOT call Task.execute_remotely() here:
+        # calling the decorated pipeline function creates the controller Task
+        # and enqueues the controller/steps on their configured ClearML queues.
+        if a.queue != DEFAULT_QUEUE:
+            raise ValueError(
+                f"This pipeline was defined with queue {DEFAULT_QUEUE!r}. "
+                "Set CLEARML_PIPELINE_QUEUE before launching if you need a different queue."
+            )
     run_config(cfg)
 
 if __name__=='__main__': main()
